@@ -12,6 +12,28 @@
     return (Array.isArray(history) ? history : []).find(entry => entry?.key === key) || null;
   }
 
+  function findReusableHistoryEntry(history, src, noteKey = "", imageIndex = null) {
+    const directMatch = findHistoryEntry(history, src);
+    if (directMatch?.result) return directMatch;
+    if (!noteKey || !Number.isInteger(imageIndex)) return null;
+
+    return (Array.isArray(history) ? history : []).find(entry => {
+      return (
+        entry?.result &&
+        historyEntryNoteKey(entry) === noteKey &&
+        entry.imageIndex === imageIndex
+      );
+    }) || null;
+  }
+
+  function countReusableHistoryEntries(history, images, noteKey = "") {
+    return (Array.isArray(images) ? images : []).filter((image, index) => {
+      const src = typeof image === "string" ? image : image?.src;
+      const imageIndex = Number.isInteger(image?.imageIndex) ? image.imageIndex : index;
+      return !!findReusableHistoryEntry(history, src, noteKey, imageIndex);
+    }).length;
+  }
+
   function upsertHistoryEntry(history, entry, limit = 100) {
     const entries = Array.isArray(history) ? history : [];
     return [
@@ -130,7 +152,9 @@
 
   const api = {
     baiduErrorMessage,
+    countReusableHistoryEntries,
     findHistoryEntry,
+    findReusableHistoryEntry,
     groupHistoryByNote,
     historyEntryNoteKey,
     imageDedupeKey,

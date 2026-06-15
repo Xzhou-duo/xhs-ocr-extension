@@ -3,7 +3,9 @@ const assert = require("node:assert/strict");
 
 const {
   baiduErrorMessage,
+  countReusableHistoryEntries,
   findHistoryEntry,
+  findReusableHistoryEntry,
   groupHistoryByNote,
   imageDedupeKey,
   isTokenCacheValid,
@@ -45,6 +47,64 @@ test("history entries match signed variants and keep the newest unique records",
   assert.deepEqual(
     upsertHistoryEntry([oldEntry, otherEntry], newEntry, 2),
     [newEntry, otherEntry]
+  );
+});
+
+test("reusable history count includes only matching entries with OCR results", () => {
+  const history = [
+    {
+      key: "https://img/1",
+      result: { text: "cached" },
+    },
+    {
+      key: "https://img/2",
+    },
+  ];
+
+  assert.equal(
+    countReusableHistoryEntries(history, [
+      "https://img/1!format?token=changed",
+      "https://img/2",
+      "https://img/3",
+    ]),
+    1
+  );
+});
+
+test("reusable history falls back to note and image index when CDN paths change", () => {
+  const cached = {
+    key: "https://old-cdn/image-a",
+    noteKey: "note:postA",
+    imageIndex: 1,
+    result: { text: "cached" },
+  };
+  const history = [cached];
+
+  assert.equal(
+    findReusableHistoryEntry(
+      history,
+      "https://new-cdn/image-b?token=fresh",
+      "note:postA",
+      1
+    ),
+    cached
+  );
+  assert.equal(
+    findReusableHistoryEntry(
+      history,
+      "https://new-cdn/image-b?token=fresh",
+      "note:postB",
+      1
+    ),
+    null
+  );
+  assert.equal(
+    countReusableHistoryEntries(
+      history,
+      [{ src: "https://new-cdn/image-b", imageIndex: 1 }],
+      "note:postA"
+    ),
+    1
   );
 });
 

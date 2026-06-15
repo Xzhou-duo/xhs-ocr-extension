@@ -15,7 +15,8 @@
 
   const {
     baiduErrorMessage,
-    findHistoryEntry,
+    countReusableHistoryEntries,
+    findReusableHistoryEntry,
     groupHistoryByNote,
     historyEntryNoteKey,
     imageDedupeKey,
@@ -416,10 +417,11 @@
 
   async function markHistoricalImages() {
     const history = await getHistory();
+    const noteKey = noteKeyFromUrl(location.href);
     document.querySelectorAll(".xhs-history-badge").forEach(badge => badge.remove());
     collectedImages.forEach((img, index) => {
       const imageUrl = getImageUrl(img.imgEl, img.src);
-      if (!findHistoryEntry(history, imageUrl)) return;
+      if (!findReusableHistoryEntry(history, imageUrl, noteKey, index)) return;
       const wrap = document.querySelector(`.xhs-img-item[data-index="${index}"] .xhs-img-wrap`);
       if (!wrap || wrap.querySelector(".xhs-history-badge")) return;
       wrap.insertAdjacentHTML("beforeend", '<span class="xhs-history-badge">已提取</span>');
@@ -697,6 +699,7 @@
     const list = document.getElementById("xhs-history-list");
     clearHistoryNav();
     list.classList.remove("xhs-history-detail-mode");
+    document.getElementById("xhs-history-clear").classList.remove("xhs-hidden");
     document.getElementById("xhs-history-count").textContent = `最近 ${groups.length} 篇`;
 
     if (groups.length === 0) {
@@ -749,6 +752,7 @@
   function renderHistoryDetail(group, history) {
     if (!group) return;
     const list = document.getElementById("xhs-history-list");
+    document.getElementById("xhs-history-clear").classList.add("xhs-hidden");
     const allText = group.entries
       .map(entry => entry.result?.text)
       .filter(Boolean)
@@ -967,8 +971,13 @@
     const imageUrl = getImageUrl(img?.imgEl, img?.src || "");
 
     if (!forceRefresh) {
-      const cached = findHistoryEntry(await getHistory(), imageUrl);
-      if (cached?.result) {
+      const cached = findReusableHistoryEntry(
+        await getHistory(),
+        imageUrl,
+        noteKeyFromUrl(location.href),
+        index
+      );
+      if (cached) {
         ocrResults[index] = cached.result;
         renderResult(index, "done", cached.result.text, { fromHistory: true });
         return { success: true, fromHistory: true };
@@ -1011,10 +1020,26 @@
     if (selectedIndices.length === 0) return;
 
     const history = await getHistory();
-    const needsOcr = selectedIndices.some(index => {
+    const noteKey = noteKeyFromUrl(location.href);
+    const selectedImages = selectedIndices.map(index => {
       const img = collectedImages[index];
-      return !findHistoryEntry(history, getImageUrl(img?.imgEl, img?.src || ""));
+      return {
+        src: getImageUrl(img?.imgEl, img?.src || ""),
+        imageIndex: index,
+      };
     });
+    const reusableCount = countReusableHistoryEntries(history, selectedImages, noteKey);
+    const needsOcrCount = selectedIndices.length - reusableCount;
+    const needsOcr = needsOcrCount > 0;
+
+    if (reusableCount === selectedIndices.length) {
+      alert("您已提取过类似内容，已直接展示历史结果，本次不会重复调用 API。");
+    } else if (reusableCount > 0) {
+      alert(
+        `您已提取过类似内容，其中 ${reusableCount} 张将直接展示历史结果，仅对 ${needsOcrCount} 张新图片调用 API。`
+      );
+    }
+
     if (needsOcr && (!baiduApiKey || !baiduSecretKey)) {
       document.getElementById("xhs-no-key-tip").classList.remove("xhs-hidden");
       return;
