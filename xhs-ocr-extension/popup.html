@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>小红书文字提取 · 设置</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 300px;
+      font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 13px;
+      color: #1a1a1a;
+      background: #fff;
+    }
+
+    .header {
+      padding: 16px;
+      background: linear-gradient(135deg, #ff2442 0%, #ff6b81 100%);
+      color: #fff;
+    }
+
+    .header-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+    }
+
+    .header-sub {
+      font-size: 11px;
+      opacity: 0.85;
+      margin-top: 2px;
+    }
+
+    .body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .field label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #555;
+    }
+
+    .field input {
+      padding: 8px 10px;
+      border: 1.5px solid #e8e8e8;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      color: #1a1a1a;
+      outline: none;
+      transition: border-color 0.15s;
+      background: #fafafa;
+    }
+
+    .field input:focus {
+      border-color: #ff2442;
+      background: #fff;
+    }
+
+    .field input::placeholder {
+      color: #ccc;
+    }
+
+    .hint {
+      font-size: 11px;
+      color: #aaa;
+      line-height: 1.5;
+    }
+
+    .hint a {
+      color: #ff2442;
+      text-decoration: none;
+    }
+
+    .hint a:hover {
+      text-decoration: underline;
+    }
+
+    .btn-save {
+      width: 100%;
+      padding: 10px;
+      background: #ff2442;
+      color: #fff;
+      border: none;
+      border-radius: 9px;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    .btn-save:hover { opacity: 0.9; }
+    .btn-save:active { opacity: 0.8; }
+
+    .toast {
+      display: none;
+      padding: 8px 12px;
+      background: #f0fff4;
+      border: 1px solid #b8e8ce;
+      border-radius: 8px;
+      color: #22a267;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    .toast.show { display: block; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #f0f0f0;
+    }
+
+    .guide {
+      padding: 0 16px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .guide-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #aaa;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .guide-step {
+      font-size: 11px;
+      color: #888;
+      line-height: 1.6;
+      padding-left: 4px;
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #e0e0e0;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+
+    .status-dot.active {
+      background: #22a267;
+    }
+
+    .status-line {
+      font-size: 11px;
+      color: #aaa;
+      display: flex;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="header-title">📖 小红书文字提取</div>
+    <div class="header-sub">配置百度 OCR API · 免费每天 50,000 次</div>
+  </div>
+
+  <div class="body">
+    <div id="status-line" class="status-line">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">未配置</span>
+    </div>
+
+    <div class="field">
+      <label>API Key</label>
+      <input type="text" id="apiKey" placeholder="请输入百度 API Key">
+    </div>
+
+    <div class="field">
+      <label>Secret Key</label>
+      <input type="password" id="secretKey" placeholder="请输入百度 Secret Key">
+    </div>
+
+    <div class="hint">
+      前往
+      <a href="https://console.bce.baidu.com/ai/#/ai/ocr/app/list" target="_blank">百度智能云控制台</a>
+      → 文字识别 → 创建应用，获取 API Key 和 Secret Key
+    </div>
+
+    <button class="btn-save" id="saveBtn">保存设置</button>
+    <div class="toast" id="toast">✓ 保存成功，刷新小红书页面后生效</div>
+  </div>
+
+  <hr class="divider">
+
+  <div class="guide">
+    <div class="guide-title">使用方法</div>
+    <div class="guide-step">① 打开任意一篇小红书图文笔记</div>
+    <div class="guide-step">② 点击页面右下角的「提取文字」红色按钮</div>
+    <div class="guide-step">③ 勾选想识别的图片，点击「开始识别」</div>
+    <div class="guide-step">④ 识别完成后，一键复制结果</div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

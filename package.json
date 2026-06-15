@@ -1,0 +1,8 @@
+{
+  "name": "xhs-ocr-extension",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node --check xhs-ocr-extension/core_utils.js && node --check xhs-ocr-extension/content_script.js && node --check xhs-ocr-extension/background.js && node --check xhs-ocr-extension/popup.js"
+  }
+}
