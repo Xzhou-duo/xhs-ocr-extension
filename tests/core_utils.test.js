@@ -7,7 +7,9 @@ const {
   findHistoryEntry,
   findReusableHistoryEntry,
   groupHistoryByNote,
+  hasPostImageDimensions,
   imageDedupeKey,
+  imagePickerScrollState,
   isTokenCacheValid,
   isTokenErrorCode,
   noteKeyFromUrl,
@@ -30,6 +32,35 @@ test("imageDedupeKey removes formatting and query parts only for comparison", ()
     imageDedupeKey("https://sns-webpic-qc.xhscdn.com/path/image!format?token=abc"),
     "https://sns-webpic-qc.xhscdn.com/path/image"
   );
+});
+
+test("post image dimensions reject avatars but allow content and unloaded images", () => {
+  assert.equal(hasPostImageDimensions(64, 64), false);
+  assert.equal(hasPostImageDimensions(640, 800), true);
+  assert.equal(hasPostImageDimensions(0, 0), true);
+});
+
+test("image picker scroll state tracks overflow and both edges", () => {
+  assert.deepEqual(imagePickerScrollState(0, 300, 300), {
+    canScroll: false,
+    canScrollLeft: false,
+    canScrollRight: false,
+  });
+  assert.deepEqual(imagePickerScrollState(0, 300, 600), {
+    canScroll: true,
+    canScrollLeft: false,
+    canScrollRight: true,
+  });
+  assert.deepEqual(imagePickerScrollState(150, 300, 600), {
+    canScroll: true,
+    canScrollLeft: true,
+    canScrollRight: true,
+  });
+  assert.deepEqual(imagePickerScrollState(300, 300, 600), {
+    canScroll: true,
+    canScrollLeft: true,
+    canScrollRight: false,
+  });
 });
 
 test("history entries match signed variants and keep the newest unique records", () => {

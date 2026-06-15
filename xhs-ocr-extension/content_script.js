@@ -10,6 +10,7 @@
   let ocrResults = {};
   let resultNavFrame = null;
   let historyNavFrame = null;
+  let imagePickerFrame = null;
   const HISTORY_KEY = "xhsOcrHistory";
   const HISTORY_LIMIT = 100;
 
@@ -18,8 +19,10 @@
     countReusableHistoryEntries,
     findReusableHistoryEntry,
     groupHistoryByNote,
+    hasPostImageDimensions,
     historyEntryNoteKey,
     imageDedupeKey,
+    imagePickerScrollState,
     isTokenErrorCode,
     isXhsImageUrl,
     noteKeyFromUrl,
@@ -167,6 +170,13 @@
   function collectImages() {
     const seen = new Set();
     const results = [];
+    const excludedImageSelector = [
+      '[class*="avatar" i]',
+      '[class*="author" i]',
+      '[class*="comment" i]',
+      '[class*="user-info" i]',
+      '[class*="userinfo" i]',
+    ].join(",");
 
     function addImage(src, thumb, imgEl) {
       // 去重 key 只取基础路径，但 src 存完整 URL（含鉴权签名和格式参数，缺一 403）
@@ -174,6 +184,12 @@
       if (seen.has(key)) return;
       seen.add(key);
       results.push({ src: src, thumb: thumb || src, imgEl: imgEl || null });
+    }
+
+    function isPostImage(img) {
+      if (!img || img.closest(excludedImageSelector)) return false;
+      const rect = img.getBoundingClientRect();
+      return hasPostImageDimensions(rect.width, rect.height);
     }
 
     // ① 优先策略：按轮播 slide 顺序抓取，保证顺序正确
@@ -188,25 +204,25 @@
     let slideImgs = [];
     for (const sel of slideSelectors) {
       const slides = document.querySelectorAll(sel);
-      if (slides.length >= 2) {
+      if (slides.length >= 1) {
         slides.forEach(slide => {
           if (slide.classList.contains("swiper-slide-duplicate")) return;
           const img = slide.querySelector("img");
-          if (!img) return;
+          if (!isPostImage(img)) return;
           img.loading = "eager";
           const src = getImageUrl(img);
           if (isXhsImageUrl(src)) slideImgs.push({ src, thumb: src, imgEl: img });
         });
-        if (slideImgs.length >= 2) break;
+        if (slideImgs.length >= 1) break;
       }
     }
 
-    if (slideImgs.length >= 2) {
+    if (slideImgs.length >= 1) {
       slideImgs.forEach(({ src, thumb, imgEl }) => addImage(src, thumb, imgEl));
     }
 
     // ② 兜底策略
-    if (results.length < 2) {
+    if (results.length === 0) {
       seen.clear();
       results.length = 0;
 
@@ -226,12 +242,10 @@
 
       const imgs = Array.from(searchRoot.querySelectorAll("img"));
       imgs.forEach(img => {
+        if (!isPostImage(img)) return;
         img.loading = "eager";
         const src = getImageUrl(img);
         if (!isXhsImageUrl(src)) return;
-        const rect = img.getBoundingClientRect();
-        if (rect.width > 0 && rect.width < 60) return;
-        if (rect.height > 0 && rect.height < 60) return;
         addImage(src, src, img);
       });
     }
@@ -296,7 +310,29 @@
             <path d="m6 9 6 6 6-6"/>
           </svg>
         </button>
-        <div id="xhs-image-grid"></div>
+        <div id="xhs-image-scroll-shell">
+          <button
+            id="xhs-image-scroll-prev"
+            class="xhs-image-scroll-btn"
+            type="button"
+            aria-label="查看前面的图片"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="m15 18-6-6 6-6"/>
+            </svg>
+          </button>
+          <div id="xhs-image-grid" tabindex="0" aria-label="帖子图片列表"></div>
+          <button
+            id="xhs-image-scroll-next"
+            class="xhs-image-scroll-btn"
+            type="button"
+            aria-label="查看后面的图片"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="m9 18 6-6-6-6"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       <div class="xhs-panel-footer">
@@ -400,12 +436,52 @@
         </label>
       </div>
     `).join("");
+    grid.scrollLeft = 0;
 
     // 绑定 checkbox 事件
     grid.querySelectorAll(".xhs-img-check").forEach(cb => {
       cb.addEventListener("change", updateSelectionState);
     });
     markHistoricalImages();
+    requestAnimationFrame(scheduleImagePickerSync);
+  }
+
+  function syncImagePickerScrollState() {
+    imagePickerFrame = null;
+    const shell = document.getElementById("xhs-image-scroll-shell");
+    const grid = document.getElementById("xhs-image-grid");
+    const prev = document.getElementById("xhs-image-scroll-prev");
+    const next = document.getElementById("xhs-image-scroll-next");
+    if (!shell || !grid || !prev || !next) return;
+
+    const state = imagePickerScrollState(
+      grid.scrollLeft,
+      grid.clientWidth,
+      grid.scrollWidth
+    );
+    shell.classList.toggle("xhs-can-scroll", state.canScroll);
+    shell.classList.toggle("xhs-can-scroll-left", state.canScrollLeft);
+    shell.classList.toggle("xhs-can-scroll-right", state.canScrollRight);
+    prev.disabled = !state.canScrollLeft;
+    next.disabled = !state.canScrollRight;
+  }
+
+  function scheduleImagePickerSync() {
+    if (imagePickerFrame !== null) return;
+    imagePickerFrame = requestAnimationFrame(syncImagePickerScrollState);
+  }
+
+  function scrollImagePicker(direction) {
+    const grid = document.getElementById("xhs-image-grid");
+    const item = grid?.querySelector(".xhs-img-item");
+    if (!grid || !item) return;
+
+    const step = (item.offsetWidth + 8) * 4;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    grid.scrollBy({
+      left: direction * step,
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
   }
 
   function setImagePickerExpanded(expanded) {
@@ -413,6 +489,7 @@
     const toggle = document.getElementById("xhs-image-picker-toggle");
     panel.classList.toggle("xhs-image-picker-expanded", expanded);
     toggle.setAttribute("aria-expanded", String(expanded));
+    if (expanded) requestAnimationFrame(scheduleImagePickerSync);
   }
 
   async function markHistoricalImages() {
@@ -1217,6 +1294,67 @@
       const panel = document.getElementById("xhs-ocr-panel");
       setImagePickerExpanded(!panel.classList.contains("xhs-image-picker-expanded"));
     });
+
+    const imageGrid = document.getElementById("xhs-image-grid");
+    document.getElementById("xhs-image-scroll-prev").addEventListener("click", () => {
+      scrollImagePicker(-1);
+    });
+    document.getElementById("xhs-image-scroll-next").addEventListener("click", () => {
+      scrollImagePicker(1);
+    });
+    imageGrid.addEventListener("scroll", scheduleImagePickerSync);
+    imageGrid.addEventListener("wheel", event => {
+      if (imageGrid.scrollWidth <= imageGrid.clientWidth) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      imageGrid.scrollLeft += event.deltaY;
+      event.preventDefault();
+    }, { passive: false });
+    imageGrid.addEventListener("keydown", event => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      scrollImagePicker(event.key === "ArrowLeft" ? -1 : 1);
+    });
+
+    let dragStartX = 0;
+    let dragStartScrollLeft = 0;
+    let imageGridDragging = false;
+    let suppressImageGridClick = false;
+    imageGrid.addEventListener("pointerdown", event => {
+      if (event.pointerType !== "mouse" || event.button !== 0) return;
+      dragStartX = event.clientX;
+      dragStartScrollLeft = imageGrid.scrollLeft;
+      imageGridDragging = false;
+      imageGrid.setPointerCapture(event.pointerId);
+    });
+    imageGrid.addEventListener("pointermove", event => {
+      if (!imageGrid.hasPointerCapture(event.pointerId)) return;
+      const distance = event.clientX - dragStartX;
+      if (!imageGridDragging && Math.abs(distance) < 4) return;
+      imageGridDragging = true;
+      imageGrid.classList.add("xhs-dragging");
+      imageGrid.scrollLeft = dragStartScrollLeft - distance;
+      event.preventDefault();
+    });
+    const finishImageGridDrag = event => {
+      if (!imageGrid.hasPointerCapture(event.pointerId)) return;
+      imageGrid.releasePointerCapture(event.pointerId);
+      imageGrid.classList.remove("xhs-dragging");
+      if (imageGridDragging) {
+        suppressImageGridClick = true;
+        setTimeout(() => {
+          suppressImageGridClick = false;
+        }, 0);
+      }
+      imageGridDragging = false;
+    };
+    imageGrid.addEventListener("pointerup", finishImageGridDrag);
+    imageGrid.addEventListener("pointercancel", finishImageGridDrag);
+    imageGrid.addEventListener("click", event => {
+      if (!suppressImageGridClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
+    window.addEventListener("resize", scheduleImagePickerSync);
 
     // 全选
     document.getElementById("xhs-select-all").addEventListener("change", function () {

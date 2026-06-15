@@ -155,20 +155,42 @@
 }
 
 /* ── 图片网格 ─────────────────────────────────────────────────────────────── */
-#xhs-image-grid {
+#xhs-image-scroll-shell {
   display: none;
+  position: relative;
+}
+
+.xhs-image-picker-expanded #xhs-image-scroll-shell {
+  display: block;
+}
+
+#xhs-image-grid {
+  display: flex;
   gap: 8px;
   padding: 4px 12px 10px;
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-behavior: smooth;
+  scrollbar-color: #c8c8c8 transparent;
+  scrollbar-width: thin;
+  touch-action: pan-x;
+  cursor: grab;
+  outline: none;
 }
 
-.xhs-image-picker-expanded #xhs-image-grid {
-  display: flex;
+#xhs-image-grid:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(255, 36, 66, 0.25);
+}
+
+#xhs-image-grid.xhs-dragging {
+  cursor: grabbing;
+  user-select: none;
+  scroll-behavior: auto;
 }
 
 #xhs-image-grid::-webkit-scrollbar {
-  height: 4px;
+  height: 6px;
 }
 
 #xhs-image-grid::-webkit-scrollbar-track {
@@ -176,8 +198,76 @@
 }
 
 #xhs-image-grid::-webkit-scrollbar-thumb {
-  background: #e0e0e0;
-  border-radius: 2px;
+  background: #c8c8c8;
+  border-radius: 3px;
+}
+
+.xhs-image-scroll-btn {
+  position: absolute;
+  top: 34px;
+  z-index: 4;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e8e8e8;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+  color: #555;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.xhs-image-scroll-btn:hover {
+  background: #fff;
+  color: #ff2442;
+}
+
+#xhs-image-scroll-prev {
+  left: 4px;
+}
+
+#xhs-image-scroll-next {
+  right: 4px;
+}
+
+.xhs-can-scroll-left #xhs-image-scroll-prev,
+.xhs-can-scroll-right #xhs-image-scroll-next {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#xhs-image-scroll-shell::before,
+#xhs-image-scroll-shell::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 6px;
+  z-index: 3;
+  width: 42px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+#xhs-image-scroll-shell::before {
+  left: 0;
+  background: linear-gradient(to right, #fff 25%, rgba(255, 255, 255, 0));
+}
+
+#xhs-image-scroll-shell::after {
+  right: 0;
+  background: linear-gradient(to left, #fff 25%, rgba(255, 255, 255, 0));
+}
+
+#xhs-image-scroll-shell.xhs-can-scroll-left::before,
+#xhs-image-scroll-shell.xhs-can-scroll-right::after {
+  opacity: 1;
 }
 
 .xhs-img-item {

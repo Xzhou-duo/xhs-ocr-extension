@@ -7,6 +7,24 @@
     return (src || "").split("?")[0].split("!")[0];
   }
 
+  function hasPostImageDimensions(width, height, minSize = 120) {
+    const renderedWidth = Number(width) || 0;
+    const renderedHeight = Number(height) || 0;
+    return (
+      (renderedWidth === 0 || renderedWidth >= minSize) &&
+      (renderedHeight === 0 || renderedHeight >= minSize)
+    );
+  }
+
+  function imagePickerScrollState(scrollLeft, clientWidth, scrollWidth, tolerance = 2) {
+    const maxScrollLeft = Math.max(0, scrollWidth - clientWidth);
+    return {
+      canScroll: maxScrollLeft > tolerance,
+      canScrollLeft: scrollLeft > tolerance,
+      canScrollRight: scrollLeft < maxScrollLeft - tolerance,
+    };
+  }
+
   function findHistoryEntry(history, src) {
     const key = imageDedupeKey(src);
     return (Array.isArray(history) ? history : []).find(entry => entry?.key === key) || null;
@@ -156,8 +174,10 @@
     findHistoryEntry,
     findReusableHistoryEntry,
     groupHistoryByNote,
+    hasPostImageDimensions,
     historyEntryNoteKey,
     imageDedupeKey,
+    imagePickerScrollState,
     isTokenCacheValid,
     isTokenErrorCode,
     isXhsImageUrl,
