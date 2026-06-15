@@ -7,6 +7,78 @@
     return (src || "").split("?")[0].split("!")[0];
   }
 
+  function findHistoryEntry(history, src) {
+    const key = imageDedupeKey(src);
+    return (Array.isArray(history) ? history : []).find(entry => entry?.key === key) || null;
+  }
+
+  function upsertHistoryEntry(history, entry, limit = 100) {
+    const entries = Array.isArray(history) ? history : [];
+    return [
+      entry,
+      ...entries.filter(item => item?.key !== entry?.key),
+    ].slice(0, limit);
+  }
+
+  function noteKeyFromUrl(url) {
+    const value = String(url || "");
+    const match = value.match(/\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/);
+    if (match) return `note:${match[1]}`;
+
+    try {
+      const parsed = new URL(value);
+      return parsed.pathname && parsed.pathname !== "/"
+        ? `path:${parsed.origin}${parsed.pathname}`
+        : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function historyEntryNoteKey(entry) {
+    return entry?.noteKey || noteKeyFromUrl(entry?.noteUrl) || `image:${entry?.key || ""}`;
+  }
+
+  function groupHistoryByNote(history) {
+    const groups = new Map();
+    (Array.isArray(history) ? history : []).forEach(entry => {
+      if (!entry?.key) return;
+      const noteKey = historyEntryNoteKey(entry);
+      if (!groups.has(noteKey)) {
+        groups.set(noteKey, {
+          noteKey,
+          noteTitle: "",
+          noteUrl: "",
+          updatedAt: 0,
+          totalImages: 0,
+          entries: [],
+        });
+      }
+
+      const group = groups.get(noteKey);
+      group.entries.push(entry);
+      group.noteTitle ||= entry.noteTitle || "";
+      group.noteUrl ||= entry.noteUrl || "";
+      group.updatedAt = Math.max(group.updatedAt, Number(entry.extractedAt) || 0);
+      group.totalImages = Math.max(group.totalImages, Number(entry.totalImages) || 0);
+    });
+
+    return Array.from(groups.values())
+      .map(group => {
+        group.entries.sort((a, b) => {
+          const aIndex = Number.isInteger(a.imageIndex) ? a.imageIndex : null;
+          const bIndex = Number.isInteger(b.imageIndex) ? b.imageIndex : null;
+          if (aIndex !== null && bIndex !== null) return aIndex - bIndex;
+          if (aIndex !== null) return -1;
+          if (bIndex !== null) return 1;
+          return (Number(a.extractedAt) || 0) - (Number(b.extractedAt) || 0);
+        });
+        group.totalImages = Math.max(group.totalImages, group.entries.length);
+        return group;
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
   function pickImageUrl(candidates, fallback = "") {
     return candidates.find(isXhsImageUrl) || fallback;
   }
@@ -58,12 +130,17 @@
 
   const api = {
     baiduErrorMessage,
+    findHistoryEntry,
+    groupHistoryByNote,
+    historyEntryNoteKey,
     imageDedupeKey,
     isTokenCacheValid,
     isTokenErrorCode,
     isXhsImageUrl,
+    noteKeyFromUrl,
     normalizeError,
     pickImageUrl,
+    upsertHistoryEntry,
   };
 
   root.XhsOcrUtils = api;

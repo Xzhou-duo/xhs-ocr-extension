@@ -8,14 +8,23 @@
   let panelOpen = false;
   let collectedImages = [];
   let ocrResults = {};
+  let resultNavFrame = null;
+  let historyNavFrame = null;
+  const HISTORY_KEY = "xhsOcrHistory";
+  const HISTORY_LIMIT = 100;
 
   const {
     baiduErrorMessage,
+    findHistoryEntry,
+    groupHistoryByNote,
+    historyEntryNoteKey,
     imageDedupeKey,
     isTokenErrorCode,
     isXhsImageUrl,
+    noteKeyFromUrl,
     normalizeError,
     pickImageUrl,
+    upsertHistoryEntry,
   } = XhsOcrUtils;
 
   // ── 工具函数 ───────────────────────────────────────────────────────────────
@@ -23,6 +32,52 @@
   function getSettings() {
     return new Promise(resolve => {
       chrome.storage.local.get(["baiduApiKey", "baiduSecretKey"], resolve);
+    });
+  }
+
+  function storageGet(keys) {
+    return new Promise(resolve => chrome.storage.local.get(keys, resolve));
+  }
+
+  function storageSet(items) {
+    return new Promise(resolve => chrome.storage.local.set(items, resolve));
+  }
+
+  async function getHistory() {
+    const stored = await storageGet(HISTORY_KEY);
+    return Array.isArray(stored[HISTORY_KEY]) ? stored[HISTORY_KEY] : [];
+  }
+
+  function getNoteTitle() {
+    const metaTitle =
+      document.querySelector('meta[property="og:title"]')?.content ||
+      document.querySelector('meta[name="title"]')?.content;
+    return String(metaTitle || document.title || "")
+      .replace(/\s*[-_|]\s*小红书.*$/i, "")
+      .trim();
+  }
+
+  async function saveHistoryEntry(index, result) {
+    const img = collectedImages[index];
+    const imageUrl = getImageUrl(img?.imgEl, img?.src || "");
+    const key = imageDedupeKey(imageUrl);
+    if (!key) return;
+
+    const history = await getHistory();
+    const entry = {
+      key,
+      imageUrl,
+      thumb: img?.thumb || imageUrl,
+      noteUrl: location.href,
+      noteKey: noteKeyFromUrl(location.href),
+      noteTitle: getNoteTitle(),
+      imageIndex: index,
+      totalImages: collectedImages.length,
+      extractedAt: Date.now(),
+      result,
+    };
+    await storageSet({
+      [HISTORY_KEY]: upsertHistoryEntry(history, entry, HISTORY_LIMIT),
     });
   }
 
@@ -102,7 +157,9 @@
       error.code = data.error_code;
       throw error;
     }
-    return (data.words_result || []).map(w => w.words).join("\n");
+    return {
+      text: (data.words_result || []).map(item => item.words).join("\n"),
+    };
   }
 
   // ── 收集页面图片 ────────────────────────────────────────────────────────────
@@ -210,6 +267,12 @@
       <div class="xhs-panel-header">
         <span class="xhs-panel-title">图片文字提取</span>
         <div class="xhs-header-actions">
+          <button id="xhs-history-btn" title="历史提取记录">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+              <path d="M3 3v5h5M12 7v5l3 2"/>
+            </svg>
+          </button>
           <button id="xhs-refresh-btn" title="重新扫描图片">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
@@ -224,7 +287,16 @@
         </div>
       </div>
 
-      <div id="xhs-image-grid"></div>
+      <div id="xhs-image-picker">
+        <button id="xhs-image-picker-toggle" type="button" aria-expanded="false">
+          <span class="xhs-image-picker-label">选择图片</span>
+          <span id="xhs-image-picker-summary">已选择 0/0 张</span>
+          <svg class="xhs-image-picker-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="m6 9 6 6 6-6"/>
+          </svg>
+        </button>
+        <div id="xhs-image-grid"></div>
+      </div>
 
       <div class="xhs-panel-footer">
         <div class="xhs-select-row">
@@ -238,10 +310,13 @@
 
       <div id="xhs-result-area" class="xhs-hidden">
         <div class="xhs-result-header">
-          <span>识别结果</span>
+          <span id="xhs-result-title">识别结果</span>
           <button id="xhs-copy-all-btn" class="xhs-btn-copy-all">复制全部</button>
         </div>
-        <div id="xhs-result-list"></div>
+        <div class="xhs-result-body">
+          <div id="xhs-result-list"></div>
+          <nav id="xhs-result-nav" class="xhs-hidden" aria-label="图片识别结果导航"></nav>
+        </div>
       </div>
 
       <div id="xhs-empty-tip" class="xhs-empty-tip xhs-hidden">
@@ -260,30 +335,58 @@
         <p>请先配置 API Key</p>
         <p class="xhs-tip-sub">点击浏览器右上角的插件图标进行设置</p>
       </div>
+
+      <div id="xhs-history-view" class="xhs-hidden">
+        <div class="xhs-history-header">
+          <button id="xhs-history-back">返回提取</button>
+          <span id="xhs-history-count"></span>
+          <button id="xhs-history-clear">清空记录</button>
+        </div>
+        <div id="xhs-history-list"></div>
+      </div>
     `;
     root.appendChild(panel);
     return panel;
   }
 
+  function buildHistoryImagePreview(root) {
+    const preview = document.createElement("div");
+    preview.id = "xhs-history-image-preview";
+    preview.className = "xhs-hidden";
+    preview.innerHTML = `
+      <button id="xhs-history-preview-close" type="button" aria-label="关闭大图预览">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M18 6 6 18M6 6l12 12"/>
+        </svg>
+      </button>
+      <img id="xhs-history-preview-image" alt="历史图片大图预览">
+    `;
+    root.appendChild(preview);
+    return preview;
+  }
+
   // ── 渲染图片网格 ────────────────────────────────────────────────────────────
   function renderImageGrid(images) {
     const grid = document.getElementById("xhs-image-grid");
+    const picker = document.getElementById("xhs-image-picker");
     const empty = document.getElementById("xhs-empty-tip");
 
     if (images.length === 0) {
       grid.innerHTML = "";
+      picker.classList.add("xhs-hidden");
       empty.classList.remove("xhs-hidden");
       document.querySelector(".xhs-panel-footer").classList.add("xhs-hidden");
       return;
     }
 
+    picker.classList.remove("xhs-hidden");
     empty.classList.add("xhs-hidden");
     document.querySelector(".xhs-panel-footer").classList.remove("xhs-hidden");
 
     grid.innerHTML = images.map((img, i) => `
       <div class="xhs-img-item" data-index="${i}">
         <label class="xhs-img-label">
-          <input type="checkbox" class="xhs-img-check" data-index="${i}">
+          <input type="checkbox" class="xhs-img-check" data-index="${i}" checked>
           <div class="xhs-img-wrap">
             <img src="${img.thumb}" alt="图片${i + 1}" loading="lazy">
             <div class="xhs-img-overlay">
@@ -301,15 +404,46 @@
     grid.querySelectorAll(".xhs-img-check").forEach(cb => {
       cb.addEventListener("change", updateSelectionState);
     });
+    markHistoricalImages();
+  }
+
+  function setImagePickerExpanded(expanded) {
+    const panel = document.getElementById("xhs-ocr-panel");
+    const toggle = document.getElementById("xhs-image-picker-toggle");
+    panel.classList.toggle("xhs-image-picker-expanded", expanded);
+    toggle.setAttribute("aria-expanded", String(expanded));
+  }
+
+  async function markHistoricalImages() {
+    const history = await getHistory();
+    document.querySelectorAll(".xhs-history-badge").forEach(badge => badge.remove());
+    collectedImages.forEach((img, index) => {
+      const imageUrl = getImageUrl(img.imgEl, img.src);
+      if (!findHistoryEntry(history, imageUrl)) return;
+      const wrap = document.querySelector(`.xhs-img-item[data-index="${index}"] .xhs-img-wrap`);
+      if (!wrap || wrap.querySelector(".xhs-history-badge")) return;
+      wrap.insertAdjacentHTML("beforeend", '<span class="xhs-history-badge">已提取</span>');
+    });
   }
 
   function updateSelectionState() {
     const checks = document.querySelectorAll(".xhs-img-check");
     const selected = Array.from(checks).filter(c => c.checked);
     const count = selected.length;
+    const total = checks.length;
+    const ocrBtn = document.getElementById("xhs-ocr-btn");
 
     document.getElementById("xhs-selected-count").textContent = `已选 ${count} 张`;
-    document.getElementById("xhs-ocr-btn").disabled = count === 0;
+    document.getElementById("xhs-image-picker-summary").textContent = `已选择 ${count}/${total} 张`;
+    ocrBtn.disabled = count === 0 || ocrBtn.dataset.running === "true";
+    if (ocrBtn.dataset.running !== "true") {
+      ocrBtn.textContent =
+        count === 0
+          ? "请选择图片"
+          : count === total
+            ? `提取全部 ${count} 张`
+            : `提取所选 ${count} 张`;
+    }
 
     const selectAll = document.getElementById("xhs-select-all");
     selectAll.indeterminate = count > 0 && count < checks.length;
@@ -322,20 +456,115 @@
     });
   }
 
+  function setActiveResultNav(index) {
+    document.querySelectorAll(".xhs-result-nav-node").forEach(node => {
+      const active = Number(node.dataset.index) === index;
+      node.classList.toggle("xhs-active", active);
+      node.setAttribute("aria-current", active ? "true" : "false");
+    });
+  }
+
+  function syncResultNavToScroll() {
+    resultNavFrame = null;
+    const list = document.getElementById("xhs-result-list");
+    const items = Array.from(list.querySelectorAll(".xhs-result-item"));
+    if (items.length === 0) return;
+
+    const listTop = list.getBoundingClientRect().top + 12;
+    let current = items[0];
+    for (const item of items) {
+      if (item.getBoundingClientRect().top <= listTop) current = item;
+      else break;
+    }
+    setActiveResultNav(Number(current.dataset.index));
+  }
+
+  function scheduleResultNavSync() {
+    if (resultNavFrame !== null) return;
+    resultNavFrame = requestAnimationFrame(syncResultNavToScroll);
+  }
+
+  function clearResultNav() {
+    if (resultNavFrame !== null) {
+      cancelAnimationFrame(resultNavFrame);
+      resultNavFrame = null;
+    }
+    const nav = document.getElementById("xhs-result-nav");
+    nav.innerHTML = "";
+    nav.classList.add("xhs-hidden");
+  }
+
+  function buildResultNav(indices) {
+    const nav = document.getElementById("xhs-result-nav");
+    document.getElementById("xhs-result-list").scrollTop = 0;
+    nav.innerHTML = indices.map(index => `
+      <button
+        type="button"
+        class="xhs-result-nav-node xhs-pending"
+        data-index="${index}"
+        data-label="图 ${index + 1}"
+        aria-label="跳转到图 ${index + 1}"
+        aria-current="false"
+        disabled
+      ></button>
+    `).join("");
+    nav.classList.toggle("xhs-hidden", indices.length === 0);
+
+    nav.querySelectorAll(".xhs-result-nav-node").forEach(node => {
+      node.addEventListener("click", () => {
+        const index = Number(node.dataset.index);
+        const item = document.getElementById(`xhs-result-item-${index}`);
+        const list = document.getElementById("xhs-result-list");
+        if (!item) return;
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        list.scrollTo({
+          top:
+            list.scrollTop +
+            item.getBoundingClientRect().top -
+            list.getBoundingClientRect().top,
+          behavior: reduceMotion ? "auto" : "smooth",
+        });
+        setActiveResultNav(index);
+      });
+    });
+  }
+
+  function updateResultNavNode(index, status) {
+    const node = document.querySelector(`.xhs-result-nav-node[data-index="${index}"]`);
+    if (!node) return;
+    node.disabled = false;
+    node.classList.remove(
+      "xhs-pending",
+      "xhs-loading",
+      "xhs-done",
+      "xhs-error",
+      "xhs-aborted"
+    );
+    node.classList.add(`xhs-${status}`);
+
+    if (!document.querySelector(".xhs-result-nav-node.xhs-active")) {
+      setActiveResultNav(index);
+    }
+    scheduleResultNavSync();
+  }
+
   // ── 渲染结果 ───────────────────────────────────────────────────────────────
-  function renderResult(index, status, text) {
+  function renderResult(index, status, text, options = {}) {
     const list = document.getElementById("xhs-result-list");
     const resultArea = document.getElementById("xhs-result-area");
+    document.getElementById("xhs-ocr-panel").classList.add("xhs-has-results");
+    document.querySelector(".xhs-image-picker-label").textContent = "修改图片选择";
     resultArea.classList.remove("xhs-hidden");
 
     const existingItem = document.getElementById(`xhs-result-item-${index}`);
-    const html = buildResultItemHTML(index, status, text);
+    const html = buildResultItemHTML(index, status, text, options);
 
     if (existingItem) {
       existingItem.outerHTML = html;
     } else {
       list.insertAdjacentHTML("beforeend", html);
     }
+    updateResultNavNode(index, status);
 
     // 绑定单条复制
     const item = document.getElementById(`xhs-result-item-${index}`);
@@ -347,12 +576,16 @@
     if (retryBtn) {
       retryBtn.addEventListener("click", () => retryImage(index));
     }
+    const refreshBtn = item?.querySelector(".xhs-refresh-single");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", () => retryImage(index, true));
+    }
   }
 
-  function buildResultItemHTML(index, status, text) {
+  function buildResultItemHTML(index, status, text, options = {}) {
     if (status === "loading") {
       return `
-        <div class="xhs-result-item" id="xhs-result-item-${index}">
+        <div class="xhs-result-item" id="xhs-result-item-${index}" data-index="${index}">
           <div class="xhs-result-item-header">
             <span class="xhs-result-label">图 ${index + 1}</span>
             <span class="xhs-status-loading">识别中…</span>
@@ -361,7 +594,7 @@
     }
     if (status === "error") {
       return `
-        <div class="xhs-result-item xhs-result-error" id="xhs-result-item-${index}">
+        <div class="xhs-result-item xhs-result-error" id="xhs-result-item-${index}" data-index="${index}">
           <div class="xhs-result-item-header">
             <span class="xhs-result-label">图 ${index + 1}</span>
             <button class="xhs-retry-single">重试此图</button>
@@ -371,7 +604,7 @@
     }
     if (status === "aborted") {
       return `
-        <div class="xhs-result-item xhs-result-aborted" id="xhs-result-item-${index}">
+        <div class="xhs-result-item xhs-result-aborted" id="xhs-result-item-${index}" data-index="${index}">
           <div class="xhs-result-item-header">
             <span class="xhs-result-label">图 ${index + 1}</span>
             <span class="xhs-status-aborted">识别已中止</span>
@@ -380,18 +613,24 @@
     }
     if (!text || text.trim() === "") {
       return `
-        <div class="xhs-result-item" id="xhs-result-item-${index}">
+        <div class="xhs-result-item" id="xhs-result-item-${index}" data-index="${index}">
           <div class="xhs-result-item-header">
-            <span class="xhs-result-label">图 ${index + 1}</span>
-            <span class="xhs-status-empty">未检测到文字</span>
+            <span class="xhs-result-label">图 ${index + 1}${options.fromHistory ? " · 来自历史" : ""}</span>
+            <div class="xhs-result-item-actions">
+              ${options.fromHistory ? '<button class="xhs-refresh-single">重新识别</button>' : ""}
+              <span class="xhs-status-empty">未检测到文字</span>
+            </div>
           </div>
         </div>`;
     }
     return `
-      <div class="xhs-result-item" id="xhs-result-item-${index}">
+      <div class="xhs-result-item" id="xhs-result-item-${index}" data-index="${index}">
         <div class="xhs-result-item-header">
-          <span class="xhs-result-label">图 ${index + 1}</span>
-          <button class="xhs-copy-single">复制</button>
+          <span class="xhs-result-label">图 ${index + 1}${options.fromHistory ? " · 来自历史" : ""}</span>
+          <div class="xhs-result-item-actions">
+            ${options.fromHistory ? '<button class="xhs-refresh-single">重新识别</button>' : ""}
+            <button class="xhs-copy-single">复制</button>
+          </div>
         </div>
         <pre class="xhs-result-text">${escapeHtml(text)}</pre>
       </div>`;
@@ -399,6 +638,276 @@
 
   function escapeHtml(str) {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function escapeAttribute(str) {
+    return escapeHtml(String(str)).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function setHistoryView(visible) {
+    const historyView = document.getElementById("xhs-history-view");
+    const panel = document.getElementById("xhs-ocr-panel");
+    const mainIds = ["xhs-image-picker", "xhs-result-area", "xhs-empty-tip", "xhs-no-key-tip"];
+    document.querySelector(".xhs-panel-title").textContent = visible
+      ? "历史提取记录"
+      : "图片文字提取";
+    document.getElementById("xhs-refresh-btn").classList.toggle("xhs-hidden", visible);
+    document.querySelector(".xhs-panel-footer").classList.toggle("xhs-hidden", visible || collectedImages.length === 0);
+    historyView.classList.toggle("xhs-hidden", !visible);
+
+    if (visible) {
+      mainIds.forEach(id => document.getElementById(id).classList.add("xhs-hidden"));
+      panel.classList.add("xhs-has-results");
+      document.getElementById("xhs-result-nav").classList.add("xhs-hidden");
+    } else {
+      clearHistoryNav();
+      document.getElementById("xhs-image-picker").classList.toggle("xhs-hidden", collectedImages.length === 0);
+      document.getElementById("xhs-empty-tip").classList.toggle("xhs-hidden", collectedImages.length > 0);
+      document.getElementById("xhs-result-area").classList.toggle(
+        "xhs-hidden",
+        document.getElementById("xhs-result-list").children.length === 0
+      );
+      panel.classList.toggle(
+        "xhs-has-results",
+        document.getElementById("xhs-result-list").children.length > 0
+      );
+      document.getElementById("xhs-result-nav").classList.toggle(
+        "xhs-hidden",
+        document.querySelectorAll(".xhs-result-nav-node").length === 0
+      );
+    }
+  }
+
+  async function renderHistory() {
+    const history = await getHistory();
+    renderHistoryGroups(history);
+  }
+
+  function formatHistoryTime(timestamp) {
+    return new Date(timestamp).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function renderHistoryGroups(history) {
+    const groups = groupHistoryByNote(history);
+    const list = document.getElementById("xhs-history-list");
+    clearHistoryNav();
+    list.classList.remove("xhs-history-detail-mode");
+    document.getElementById("xhs-history-count").textContent = `最近 ${groups.length} 篇`;
+
+    if (groups.length === 0) {
+      list.innerHTML = '<div class="xhs-history-empty">暂无提取记录</div>';
+      return;
+    }
+
+    list.innerHTML = groups.map((group, index) => {
+      const cover = group.entries[0]?.thumb || group.entries[0]?.imageUrl || "";
+      const title = group.noteTitle || "未命名帖子";
+      return `
+        <div class="xhs-history-post">
+          <button class="xhs-history-post-main" data-index="${index}" type="button">
+            <span class="xhs-history-post-cover">
+              ${cover ? `<img src="${escapeAttribute(cover)}" alt="">` : ""}
+            </span>
+            <span class="xhs-history-post-info">
+              <strong>${escapeHtml(title)}</strong>
+              <span>${group.entries.length === group.totalImages
+                ? `${group.entries.length} 张图片`
+                : `已解析 ${group.entries.length}/${group.totalImages} 张`}</span>
+              <time>${escapeHtml(formatHistoryTime(group.updatedAt))}</time>
+            </span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="m9 18 6-6-6-6"/>
+            </svg>
+          </button>
+          <button class="xhs-history-post-delete" data-index="${index}" type="button">删除</button>
+        </div>`;
+    }).join("");
+
+    list.querySelectorAll(".xhs-history-post-main").forEach(btn => {
+      btn.addEventListener("click", () => {
+        renderHistoryDetail(groups[Number(btn.dataset.index)], history);
+      });
+    });
+    list.querySelectorAll(".xhs-history-post-delete").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const group = groups[Number(btn.dataset.index)];
+        if (!group || !confirm(`确定删除“${group.noteTitle || "未命名帖子"}”的历史记录吗？`)) return;
+        const remaining = history.filter(
+          entry => historyEntryNoteKey(entry) !== group.noteKey
+        );
+        await storageSet({ [HISTORY_KEY]: remaining });
+        renderHistoryGroups(remaining);
+      });
+    });
+  }
+
+  function renderHistoryDetail(group, history) {
+    if (!group) return;
+    const list = document.getElementById("xhs-history-list");
+    const allText = group.entries
+      .map(entry => entry.result?.text)
+      .filter(Boolean)
+      .join("\n\n---\n\n");
+    document.getElementById("xhs-history-count").textContent =
+      `${group.entries.length}/${group.totalImages} 张`;
+
+    list.classList.add("xhs-history-detail-mode");
+    list.innerHTML = `
+      <div class="xhs-history-detail-header">
+        <button id="xhs-history-detail-back" type="button">返回帖子列表</button>
+        <div class="xhs-history-detail-actions">
+          ${group.noteUrl
+            ? `<a href="${escapeAttribute(group.noteUrl)}" target="_blank" rel="noreferrer">打开原帖</a>`
+            : ""}
+          ${allText ? '<button id="xhs-history-copy-all" type="button">复制全部</button>' : ""}
+        </div>
+      </div>
+      <div class="xhs-history-detail-title">${escapeHtml(group.noteTitle || "未命名帖子")}</div>
+      <div class="xhs-history-detail-body">
+        <div id="xhs-history-detail-list">
+          ${group.entries.map((entry, position) => {
+            const text = entry.result?.text || "";
+            const imageNumber = Number.isInteger(entry.imageIndex)
+              ? entry.imageIndex + 1
+              : position + 1;
+            const thumb = entry.thumb || entry.imageUrl || "";
+            return `
+              <article class="xhs-history-detail-item" data-position="${position}">
+                <button
+                  class="xhs-history-detail-image"
+                  type="button"
+                  data-image-url="${escapeAttribute(thumb)}"
+                  aria-label="展开图 ${imageNumber}"
+                  ${thumb ? "" : "disabled"}
+                >
+                  ${thumb ? `<img src="${escapeAttribute(thumb)}" alt="图 ${imageNumber}">` : ""}
+                  ${thumb ? '<span>点击展开</span>' : ""}
+                </button>
+                <div class="xhs-history-detail-result">
+                  <div>
+                    <strong>图 ${imageNumber}</strong>
+                    ${text
+                      ? `<button class="xhs-history-copy" data-position="${position}" type="button">复制</button>`
+                      : '<span>未检测到文字</span>'}
+                  </div>
+                  <pre>${text ? escapeHtml(text) : "未检测到文字"}</pre>
+                </div>
+              </article>`;
+          }).join("")}
+        </div>
+        <nav id="xhs-history-detail-nav" aria-label="历史图片结果导航">
+          ${group.entries.map((entry, position) => {
+            const imageNumber = Number.isInteger(entry.imageIndex)
+              ? entry.imageIndex + 1
+              : position + 1;
+            return `
+              <button
+                type="button"
+                class="xhs-result-nav-node${position === 0 ? " xhs-active" : ""}"
+                data-position="${position}"
+                data-label="图 ${imageNumber}"
+                aria-label="跳转到图 ${imageNumber}"
+                aria-current="${position === 0 ? "true" : "false"}"
+              ></button>`;
+          }).join("")}
+        </nav>
+      </div>
+    `;
+
+    document.getElementById("xhs-history-detail-back").addEventListener("click", () => {
+      renderHistoryGroups(history);
+    });
+    const copyAllBtn = document.getElementById("xhs-history-copy-all");
+    if (copyAllBtn) {
+      copyAllBtn.addEventListener("click", () => copyToClipboard(allText, copyAllBtn));
+    }
+    list.querySelectorAll(".xhs-history-copy").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const text = group.entries[Number(btn.dataset.position)]?.result?.text;
+        if (text) copyToClipboard(text, btn);
+      });
+    });
+    list.querySelectorAll(".xhs-history-detail-image[data-image-url]").forEach(btn => {
+      btn.addEventListener("click", () => openHistoryImagePreview(btn.dataset.imageUrl));
+    });
+    const detailList = document.getElementById("xhs-history-detail-list");
+    detailList.addEventListener("scroll", scheduleHistoryNavSync);
+    document.querySelectorAll("#xhs-history-detail-nav .xhs-result-nav-node").forEach(node => {
+      node.addEventListener("click", () => {
+        const position = Number(node.dataset.position);
+        const item = detailList.querySelector(
+          `.xhs-history-detail-item[data-position="${position}"]`
+        );
+        if (!item) return;
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        detailList.scrollTo({
+          top:
+            detailList.scrollTop +
+            item.getBoundingClientRect().top -
+            detailList.getBoundingClientRect().top,
+          behavior: reduceMotion ? "auto" : "smooth",
+        });
+        setActiveHistoryNav(position);
+      });
+    });
+  }
+
+  function setActiveHistoryNav(position) {
+    document.querySelectorAll("#xhs-history-detail-nav .xhs-result-nav-node").forEach(node => {
+      const active = Number(node.dataset.position) === position;
+      node.classList.toggle("xhs-active", active);
+      node.setAttribute("aria-current", active ? "true" : "false");
+    });
+  }
+
+  function syncHistoryNavToScroll() {
+    historyNavFrame = null;
+    const detailList = document.getElementById("xhs-history-detail-list");
+    if (!detailList) return;
+    const items = Array.from(detailList.querySelectorAll(".xhs-history-detail-item"));
+    if (items.length === 0) return;
+    if (detailList.scrollTop + detailList.clientHeight >= detailList.scrollHeight - 2) {
+      setActiveHistoryNav(Number(items[items.length - 1].dataset.position));
+      return;
+    }
+
+    const listTop = detailList.getBoundingClientRect().top + 12;
+    let current = items[0];
+    for (const item of items) {
+      if (item.getBoundingClientRect().top <= listTop) current = item;
+      else break;
+    }
+    setActiveHistoryNav(Number(current.dataset.position));
+  }
+
+  function scheduleHistoryNavSync() {
+    if (historyNavFrame !== null) return;
+    historyNavFrame = requestAnimationFrame(syncHistoryNavToScroll);
+  }
+
+  function clearHistoryNav() {
+    if (historyNavFrame !== null) {
+      cancelAnimationFrame(historyNavFrame);
+      historyNavFrame = null;
+    }
+  }
+
+  function openHistoryImagePreview(imageUrl) {
+    if (!imageUrl) return;
+    const preview = document.getElementById("xhs-history-image-preview");
+    document.getElementById("xhs-history-preview-image").src = imageUrl;
+    preview.classList.remove("xhs-hidden");
+  }
+
+  function closeHistoryImagePreview() {
+    const preview = document.getElementById("xhs-history-image-preview");
+    preview.classList.add("xhs-hidden");
+    document.getElementById("xhs-history-preview-image").removeAttribute("src");
   }
 
   // ── 复制到剪贴板 ────────────────────────────────────────────────────────────
@@ -452,28 +961,43 @@
     }
   }
 
-  async function processImage(index, apiKey, secretKey) {
+  async function processImage(index, apiKey, secretKey, forceRefresh = false) {
+    delete ocrResults[index];
+    const img = collectedImages[index];
+    const imageUrl = getImageUrl(img?.imgEl, img?.src || "");
+
+    if (!forceRefresh) {
+      const cached = findHistoryEntry(await getHistory(), imageUrl);
+      if (cached?.result) {
+        ocrResults[index] = cached.result;
+        renderResult(index, "done", cached.result.text, { fromHistory: true });
+        return { success: true, fromHistory: true };
+      }
+    }
+
     renderResult(index, "loading", "");
     try {
-      const text = await recognizeImage(index, apiKey, secretKey);
-      ocrResults[index] = text;
-      renderResult(index, "done", text);
-      return true;
+      const result = await recognizeImage(index, apiKey, secretKey);
+      ocrResults[index] = result;
+      renderResult(index, "done", result.text);
+      await saveHistoryEntry(index, result);
+      markHistoricalImages();
+      return { success: true, fromHistory: false };
     } catch (error) {
       delete ocrResults[index];
       renderResult(index, "error", normalizeError(error));
-      return false;
+      return { success: false, fromHistory: false };
     }
   }
 
-  async function retryImage(index) {
+  async function retryImage(index, forceRefresh = false) {
     const settings = await getSettings();
     const { baiduApiKey, baiduSecretKey } = settings;
     if (!baiduApiKey || !baiduSecretKey) {
       renderResult(index, "error", "请先配置百度 API Key 和 Secret Key");
       return;
     }
-    await processImage(index, baiduApiKey, baiduSecretKey);
+    await processImage(index, baiduApiKey, baiduSecretKey, forceRefresh);
   }
 
   // ── 主流程：OCR ─────────────────────────────────────────────────────────────
@@ -481,33 +1005,41 @@
     const settings = await getSettings();
     const { baiduApiKey, baiduSecretKey } = settings;
 
-    if (!baiduApiKey || !baiduSecretKey) {
-      document.getElementById("xhs-no-key-tip").classList.remove("xhs-hidden");
-      return;
-    }
-
     const checks = document.querySelectorAll(".xhs-img-check:checked");
     const selectedIndices = Array.from(checks).map(c => parseInt(c.dataset.index));
 
     if (selectedIndices.length === 0) return;
 
+    const history = await getHistory();
+    const needsOcr = selectedIndices.some(index => {
+      const img = collectedImages[index];
+      return !findHistoryEntry(history, getImageUrl(img?.imgEl, img?.src || ""));
+    });
+    if (needsOcr && (!baiduApiKey || !baiduSecretKey)) {
+      document.getElementById("xhs-no-key-tip").classList.remove("xhs-hidden");
+      return;
+    }
+    if (needsOcr) {
+      try {
+        await ensureToken(baiduApiKey, baiduSecretKey);
+      } catch (error) {
+        alert(normalizeError(error));
+        return;
+      }
+    }
+
     const ocrBtn = document.getElementById("xhs-ocr-btn");
+    document.getElementById("xhs-result-title").textContent = `识别结果（${selectedIndices.length}）`;
+    setImagePickerExpanded(false);
+    ocrBtn.dataset.running = "true";
     ocrBtn.disabled = true;
     ocrBtn.textContent = "识别中…";
 
     // 清空旧结果
     document.getElementById("xhs-result-list").innerHTML = "";
     document.getElementById("xhs-result-area").classList.add("xhs-hidden");
+    buildResultNav(selectedIndices);
     ocrResults = {};
-
-    try {
-      await ensureToken(baiduApiKey, baiduSecretKey);
-    } catch (err) {
-      ocrBtn.disabled = false;
-      ocrBtn.textContent = "开始识别";
-      alert(normalizeError(err));
-      return;
-    }
 
     const startUrl = location.href; // 记录开始时的URL，用于检测路由跳转
     try {
@@ -519,20 +1051,23 @@
 
         const index = selectedIndices[i];
         ocrBtn.textContent = `识别中 ${i + 1}/${selectedIndices.length}`;
-        await processImage(index, baiduApiKey, baiduSecretKey);
+        const outcome = await processImage(index, baiduApiKey, baiduSecretKey);
 
-        if (i < selectedIndices.length - 1) {
+        if (!outcome.fromHistory && i < selectedIndices.length - 1) {
           await sleep(350);
         }
       }
     } finally {
-      ocrBtn.disabled = false;
-      ocrBtn.textContent = "开始识别";
+      delete ocrBtn.dataset.running;
+      updateSelectionState();
     }
 
     // 绑定复制全部
     document.getElementById("xhs-copy-all-btn").onclick = () => {
-      const allText = Object.values(ocrResults).filter(Boolean).join("\n\n---\n\n");
+      const allText = Object.values(ocrResults)
+        .map(result => result?.text)
+        .filter(Boolean)
+        .join("\n\n---\n\n");
       if (allText) {
         const btn = document.getElementById("xhs-copy-all-btn");
         copyToClipboard(allText, btn);
@@ -553,15 +1088,22 @@
     document.getElementById("xhs-empty-tip").classList.add("xhs-hidden");
     document.getElementById("xhs-no-key-tip").classList.add("xhs-hidden");
     document.getElementById("xhs-result-list").innerHTML = "";
+    document.getElementById("xhs-result-title").textContent = "识别结果";
+    document.querySelector(".xhs-image-picker-label").textContent = "选择图片";
+    panel.classList.remove("xhs-has-results");
+    clearResultNav();
     ocrResults = {};
+    setImagePickerExpanded(false);
 
     collectedImages = collectImages();
     renderImageGrid(collectedImages);
     updateSelectionState();
+    setHistoryView(false);
   }
 
   function closePanel() {
     panelOpen = false;
+    closeHistoryImagePreview();
     const panel = document.getElementById("xhs-ocr-panel");
     panel.classList.remove("xhs-panel-open");
     document.getElementById("xhs-ocr-fab").style.display = "flex";
@@ -595,6 +1137,7 @@
     const root = createRoot();
     const fab = buildFAB(root);
     const panel = buildPanel(root);
+    const imagePreview = buildHistoryImagePreview(root);
 
     // 初始判断：不在笔记详情页时先隐藏
     if (!isNoteDetailPage()) {
@@ -607,6 +1150,29 @@
     // 关闭
     document.getElementById("xhs-close-btn").addEventListener("click", closePanel);
 
+    document.getElementById("xhs-history-btn").addEventListener("click", async () => {
+      setHistoryView(true);
+      await renderHistory();
+    });
+    document.getElementById("xhs-history-back").addEventListener("click", () => {
+      setHistoryView(false);
+      markHistoricalImages();
+    });
+    document.getElementById("xhs-history-clear").addEventListener("click", async () => {
+      if (!confirm("确定清空全部历史提取记录吗？")) return;
+      await storageSet({ [HISTORY_KEY]: [] });
+      await renderHistory();
+    });
+    document.getElementById("xhs-history-preview-close").addEventListener("click", closeHistoryImagePreview);
+    imagePreview.addEventListener("click", event => {
+      if (event.target === imagePreview) closeHistoryImagePreview();
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && !imagePreview.classList.contains("xhs-hidden")) {
+        closeHistoryImagePreview();
+      }
+    });
+
     // 刷新扫描
     document.getElementById("xhs-refresh-btn").addEventListener("click", () => {
       collectedImages = collectImages();
@@ -614,7 +1180,17 @@
       updateSelectionState();
       document.getElementById("xhs-result-area").classList.add("xhs-hidden");
       document.getElementById("xhs-result-list").innerHTML = "";
+      document.getElementById("xhs-result-title").textContent = "识别结果";
+      document.querySelector(".xhs-image-picker-label").textContent = "选择图片";
+      document.getElementById("xhs-ocr-panel").classList.remove("xhs-has-results");
+      clearResultNav();
       ocrResults = {};
+      setImagePickerExpanded(false);
+    });
+
+    document.getElementById("xhs-image-picker-toggle").addEventListener("click", () => {
+      const panel = document.getElementById("xhs-ocr-panel");
+      setImagePickerExpanded(!panel.classList.contains("xhs-image-picker-expanded"));
     });
 
     // 全选
@@ -627,7 +1203,7 @@
 
     // OCR 按钮
     document.getElementById("xhs-ocr-btn").addEventListener("click", runOCR);
-
+    document.getElementById("xhs-result-list").addEventListener("scroll", scheduleResultNavSync);
     // 监听 SPA 路由变化：URL 改变时重新判断显隐
     let lastUrl = location.href;
     new MutationObserver(() => {
