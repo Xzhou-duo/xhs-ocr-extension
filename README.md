@@ -4,8 +4,7 @@
 
 当前版本：`1.0.1`
 
-![Uploading image.png…]()
-
+![Uploading 已生成图像 1.png…]()
 
 ## 主要功能
 
