@@ -3,7 +3,8 @@
 一款用于 Chrome / Edge 的 Manifest V3 浏览器扩展。在小红书网页版图文笔记中选择帖子正文图片，调用百度 OCR 提取文字，并支持复制结果、历史记录和重复提取拦截。
 
 当前版本：`1.0.1`
-![Uploading 已生成图像 1.png…]()
+
+<img width="1114" height="626" alt="image" src="https://github.com/user-attachments/assets/2705dbef-d89d-4baf-badf-002ba6b28ffb" />
 
 ## 主要功能
 
